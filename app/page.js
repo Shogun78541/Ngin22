@@ -37,13 +37,11 @@ export default function Home() {
 
   const [where, setWhere] = useState("");
 
-  const [scope, setScope] = useState(
-    "remote"
-  );
+  const [scope, setScope] =
+    useState("remote");
 
-  const [country, setCountry] = useState(
-    "gb"
-  );
+  const [country, setCountry] =
+    useState("gb");
 
   const [employment, setEmployment] =
     useState("all");
@@ -53,14 +51,59 @@ export default function Home() {
   const [loading, setLoading] =
     useState(false);
 
+  const [loadingMore, setLoadingMore] =
+    useState(false);
+
   const [error, setError] =
     useState("");
 
   const [searched, setSearched] =
     useState(false);
 
+  const [page, setPage] =
+    useState(1);
+
   const [totalResults, setTotalResults] =
     useState(0);
+
+  const [hasMore, setHasMore] =
+    useState(false);
+
+  async function fetchJobs(pageNumber) {
+    const params =
+      new URLSearchParams({
+        scope,
+        country,
+        what:
+          what.trim() ||
+          "customer service",
+        where: where.trim(),
+        skills: skills.trim(),
+        page: String(pageNumber)
+      });
+
+    if (employment !== "all") {
+      params.set(
+        "employment",
+        employment
+      );
+    }
+
+    const res = await fetch(
+      `/api/jobs?${params.toString()}`
+    );
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(
+        data.error ||
+          "Job search failed."
+      );
+    }
+
+    return data;
+  }
 
   async function searchJobs(e) {
     e.preventDefault();
@@ -69,39 +112,13 @@ export default function Home() {
     setError("");
     setSearched(true);
     setJobs([]);
+    setPage(1);
     setTotalResults(0);
+    setHasMore(false);
 
     try {
-      const params =
-        new URLSearchParams({
-          scope,
-          country,
-          what:
-            what.trim() ||
-            "customer service",
-          where: where.trim(),
-          skills: skills.trim()
-        });
-
-      if (employment !== "all") {
-        params.set(
-          "employment",
-          employment
-        );
-      }
-
-      const res = await fetch(
-        `/api/jobs?${params.toString()}`
-      );
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(
-          data.error ||
-            "Job search failed."
-        );
-      }
+      const data =
+        await fetchJobs(1);
 
       setJobs(data.jobs || []);
 
@@ -109,17 +126,62 @@ export default function Home() {
         data.totalResults || 0
       );
 
+      setHasMore(
+        Boolean(data.hasMore)
+      );
+
     } catch (err) {
       setJobs([]);
-      setTotalResults(0);
-
       setError(
         err.message ||
           "Something went wrong."
       );
-
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadMoreJobs() {
+    if (
+      loadingMore ||
+      !hasMore
+    ) {
+      return;
+    }
+
+    setLoadingMore(true);
+    setError("");
+
+    try {
+      const nextPage =
+        page + 1;
+
+      const data =
+        await fetchJobs(nextPage);
+
+      /*
+       * Add the new jobs to the
+       * existing jobs instead of
+       * replacing them.
+       */
+      setJobs((currentJobs) => [
+        ...currentJobs,
+        ...(data.jobs || [])
+      ]);
+
+      setPage(nextPage);
+
+      setHasMore(
+        Boolean(data.hasMore)
+      );
+
+    } catch (err) {
+      setError(
+        err.message ||
+          "Could not load more jobs."
+      );
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -240,9 +302,9 @@ export default function Home() {
               <div className="full">
                 <div className="empty">
                   🌎 Remote mode searches
-                  for jobs advertised as
-                  remote, work-from-home,
-                  home-based or similar.
+                  for remote, work-from-home,
+                  home-based and similar
+                  opportunities.
                 </div>
               </div>
             )}
@@ -263,7 +325,7 @@ export default function Home() {
                 <div className="empty">
                   🌐 International mode
                   searches all configured
-                  countries at the same time.
+                  countries.
                 </div>
               </div>
             )}
@@ -291,6 +353,7 @@ export default function Home() {
                   )
                 }
               >
+
                 <option value="all">
                   Any
                 </option>
@@ -306,6 +369,7 @@ export default function Home() {
                 <option value="contract">
                   Contract
                 </option>
+
               </select>
 
             </label>
@@ -378,86 +442,134 @@ export default function Home() {
 
             ) : (
 
-              jobs.map((job) => (
+              <>
 
-                <article
-                  className="job"
-                  key={job.id}
-                >
+                {jobs.map((job) => (
 
-                  <div className="score">
+                  <article
+                    className="job"
+                    key={job.id}
+                  >
 
-                    {job.match}%
+                    <div className="score">
 
-                    <small>
-                      match
-                    </small>
+                      {job.match}%
 
-                  </div>
+                      <small>
+                        match
+                      </small>
 
-                  <div className="jobBody">
+                    </div>
 
-                    <h3>
-                      {job.title}
-                    </h3>
+                    <div className="jobBody">
 
-                    <p className="company">
-                      {job.company ||
-                        "Company not listed"}
-                    </p>
+                      <h3>
+                        {job.title}
+                      </h3>
 
-                    <p className="meta">
+                      <p className="company">
+                        {job.company ||
+                          "Company not listed"}
+                      </p>
 
-                      {job.location ||
-                        "Location not listed"}
+                      <p className="meta">
 
-                      {" · "}
+                        {job.location ||
+                          "Location not listed"}
 
-                      {job.country ||
-                        ""}
+                        {" · "}
 
-                      {" · "}
+                        {job.country ||
+                          ""}
 
-                      {job.contract ||
-                        "Job"}
+                        {" · "}
 
-                    </p>
+                        {job.contract ||
+                          "Job"}
 
-                    <p className="description">
-                      {job.description}
-                    </p>
+                      </p>
 
-                    {job.matchedSkills &&
-                      job.matchedSkills
-                        .length > 0 && (
+                      <p className="description">
+                        {job.description}
+                      </p>
 
-                        <div className="tags">
+                      {job.matchedSkills &&
+                        job.matchedSkills
+                          .length > 0 && (
 
-                          {job.matchedSkills.map(
-                            (skill) => (
-                              <span key={skill}>
-                                {skill}
-                              </span>
-                            )
-                          )}
+                          <div className="tags">
 
-                        </div>
+                            {job.matchedSkills.map(
+                              (skill) => (
+                                <span
+                                  key={skill}
+                                >
+                                  {skill}
+                                </span>
+                              )
+                            )}
 
-                      )}
+                          </div>
 
-                    <a
-                      href={job.url}
-                      target="_blank"
-                      rel="noreferrer"
+                        )}
+
+                      <a
+                        href={job.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View & apply →
+                      </a>
+
+                    </div>
+
+                  </article>
+
+                ))}
+
+                {hasMore && (
+
+                  <div
+                    style={{
+                      textAlign: "center",
+                      marginTop: "24px"
+                    }}
+                  >
+
+                    <button
+                      className="search"
+                      onClick={loadMoreJobs}
+                      disabled={loadingMore}
                     >
-                      View & apply →
-                    </a>
+
+                      {loadingMore
+                        ? "Loading more jobs..."
+                        : `Load More Jobs ↓`}
+
+                    </button>
 
                   </div>
 
-                </article>
+                )}
 
-              ))
+                {!hasMore &&
+                  jobs.length > 0 && (
+
+                    <div
+                      className="empty"
+                      style={{
+                        marginTop: "24px",
+                        textAlign: "center"
+                      }}
+                    >
+                      🎉 You've reached the
+                      end of the available
+                      results.
+                    </div>
+
+                  )}
+
+              </>
 
             )}
 
