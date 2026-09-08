@@ -1,20 +1,5 @@
 import { NextResponse } from "next/server";
 
-const STOP_WORDS = new Set([
-  "and", "the", "for", "with", "from", "this", "that", "your", "you",
-  "job", "jobs", "remote", "work", "working", "role", "position"
-]);
-
-function words(text) {
-  return [...new Set(
-    String(text || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9+#.\- ]/g, " ")
-      .split(/\s+/)
-      .filter((w) => w.length >= 3 && !STOP_WORDS.has(w))
-  )];
-}
-
 function cleanHtml(text) {
   return String(text || "")
     .replace(/<[^>]*>/g, " ")
@@ -22,8 +7,19 @@ function cleanHtml(text) {
     .trim();
 }
 
+function words(text) {
+  return [...new Set(
+    String(text || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9+#.\- ]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 3)
+  )];
+}
+
 function scoreJob(job, userText) {
   const wanted = words(userText);
+
   const haystack = [
     job.title,
     job.description,
@@ -32,7 +28,10 @@ function scoreJob(job, userText) {
   ].join(" ").toLowerCase();
 
   const matched = wanted.filter((word) => haystack.includes(word));
-  const raw = wanted.length ? Math.round((matched.length / wanted.length) * 100) : 0;
+
+  const raw = wanted.length
+    ? Math.round((matched.length / wanted.length) * 100)
+    : 0;
 
   return {
     match: Math.min(99, Math.max(10, raw)),
@@ -44,16 +43,21 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url);
 
   const country = searchParams.get("country") || "gb";
-  const what = searchParams.get("what") || "remote jobs";
-  const where = searchParams.get("where") || "remote";
+  const what = searchParams.get("what") || "customer service";
+  const where = searchParams.get("where") || "London";
   const employment = searchParams.get("employment") || "all";
+  const skills = searchParams.get("skills") || "";
 
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
 
   if (!appId || !appKey) {
     return NextResponse.json(
-      { error: "Adzuna is not configured. Add ADZUNA_APP_ID and ADZUNA_APP_KEY to your environment variables." },
+      {
+        error: "Adzuna credentials are missing.",
+        hasAppId: Boolean(appId),
+        hasAppKey: Boolean(appKey)
+      },
       { status: 500 }
     );
   }
@@ -63,19 +67,29 @@ export async function GET(request) {
     app_key: appKey,
     results_per_page: "30",
     what,
-    where,
-    "content-type": "application/json"
+    where
   });
 
-  if (employment === "full_time") params.set("full_time", "1");
-  if (employment === "part_time") params.set("part_time", "1");
-  if (employment === "contract") params.set("contract", "1");
+  if (employment === "full_time") {
+    params.set("full_time", "1");
+  }
 
-  const url = `https://api.adzuna.com/v1/api/jobs/${encodeURIComponent(country)}/search/1?${params.toString()}`;
+  if (employment === "part_time") {
+    params.set("part_time", "1");
+  }
+
+  if (employment === "contract") {
+    params.set("contract", "1");
+  }
+
+  const url =
+    `https://api.adzuna.com/v1/api/jobs/${encodeURIComponent(country)}/search/1?${params.toString()}`;
 
   try {
     const response = await fetch(url, {
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json"
+      },
       cache: "no-store"
     });
 
@@ -83,32 +97,74 @@ export async function GET(request) {
 
     if (!response.ok) {
       return NextResponse.json(
-        { error: `Adzuna returned HTTP ${response.status}: ${text.slice(0, 500)}` },
+        {
+          error: `Adzuna returned HTTP ${response.status}`,
+          adzunaResponse: text.slice(0, 1000)
+        },
         { status: response.status }
       );
     }
 
-    const data = JSON.parse(text);
+    let data;
 
-    const jobs = (data.results || []).map((job) => {
-      const scoring = scoreJob(job, `${what} ${searchParams.get("skills") || ""}`);
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return NextResponse.json(
+        {
+          error: "Adzuna returned something that was not valid JSON.",
+          response: text.slice(0, 1000)
+        },
+        { status: 502 }
+      );
+    }
+
+    const results = Array.isArray(data.results)
+      ? data.results
+      : [];
+
+    const jobs = results.map((job) => {
+      const scoring = scoreJob(
+        job,
+        `${what} ${skills}`
+      );
 
       return {
         id: job.id,
         title: job.title,
         company: job.company?.display_name || "",
         location: job.location?.display_name || "",
-        contract: [job.contract_time, job.contract_type].filter(Boolean).join(" / "),
+        contract: [
+          job.contract_time,
+          job.contract_type
+        ]
+          .filter(Boolean)
+          .join(" / "),
         description: cleanHtml(job.description).slice(0, 500),
         url: job.redirect_url,
         ...scoring
       };
-    }).sort((a, b) => b.match - a.match);
+    });
 
-    return NextResponse.json({ jobs });
+    return NextResponse.json({
+      success: true,
+      search: {
+        country,
+        what,
+        where,
+        employment,
+        skills
+      },
+      totalResults: data.count ?? results.length,
+      jobs
+    });
+
   } catch (error) {
     return NextResponse.json(
-      { error: `Could not reach Adzuna: ${error.message}` },
+      {
+        error: "Could not reach Adzuna.",
+        details: error?.message || "Unknown error"
+      },
       { status: 502 }
     );
   }
