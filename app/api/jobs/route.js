@@ -83,6 +83,20 @@ function words(text) {
   ];
 }
 
+function isRemoteJob(job) {
+  const text = [
+    job.title,
+    job.description,
+    job.location?.display_name
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return REMOTE_TERMS.some((term) =>
+    text.includes(term)
+  );
+}
+
 function scoreJob(job, userText, remoteMode = false) {
   const wanted = words(userText);
 
@@ -100,37 +114,19 @@ function scoreJob(job, userText, remoteMode = false) {
   );
 
   let score = wanted.length
-    ? Math.round((matched.length / wanted.length) * 100)
+    ? Math.round(
+        (matched.length / wanted.length) * 100
+      )
     : 50;
 
-  if (remoteMode) {
-    const remoteMatch = REMOTE_TERMS.some((term) =>
-      haystack.includes(term)
-    );
-
-    if (remoteMatch) {
-      score += 15;
-    }
+  if (remoteMode && isRemoteJob(job)) {
+    score += 15;
   }
 
   return {
     match: Math.min(99, Math.max(10, score)),
     matchedSkills: matched.slice(0, 8)
   };
-}
-
-function isRemoteJob(job) {
-  const text = [
-    job.title,
-    job.description,
-    job.location?.display_name
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  return REMOTE_TERMS.some((term) =>
-    text.includes(term)
-  );
 }
 
 async function searchCountry({
@@ -140,7 +136,8 @@ async function searchCountry({
   what,
   where,
   employment,
-  remoteMode
+  remoteMode,
+  page
 }) {
   const params = new URLSearchParams({
     app_id: appId,
@@ -150,27 +147,10 @@ async function searchCountry({
     "content-type": "application/json"
   });
 
-  /*
-   * Normal location search.
-   *
-   * Example:
-   * where=London
-   */
   if (!remoteMode && where) {
     params.set("where", where);
   }
 
-  /*
-   * Remote search:
-   *
-   * We intentionally DO NOT send:
-   *
-   * where=remote
-   *
-   * because "remote" is not a universal location.
-   *
-   * Instead the search keyword contains remote terms.
-   */
   if (remoteMode) {
     params.set(
       "what",
@@ -193,7 +173,7 @@ async function searchCountry({
   const url =
     `https://api.adzuna.com/v1/api/jobs/${encodeURIComponent(
       country
-    )}/search/1?${params.toString()}`;
+    )}/search/${page}?${params.toString()}`;
 
   const response = await fetch(url, {
     headers: {
@@ -251,6 +231,11 @@ export async function GET(request) {
   const employment =
     searchParams.get("employment") || "all";
 
+  const page = Math.max(
+    1,
+    Number(searchParams.get("page") || "1")
+  );
+
   const appId =
     process.env.ADZUNA_APP_ID;
 
@@ -260,41 +245,40 @@ export async function GET(request) {
   if (!appId || !appKey) {
     return NextResponse.json(
       {
-        error: "Adzuna credentials are missing."
+        error:
+          "Adzuna credentials are missing."
       },
       { status: 500 }
     );
   }
 
-  /*
-   * Determine which countries should be searched.
-   */
   let countries = [];
 
   if (scope === "international") {
-    countries = SEARCH_GROUPS.international;
+    countries =
+      SEARCH_GROUPS.international;
   } else if (scope === "southeast_asia") {
-    countries = SEARCH_GROUPS.southeast_asia;
+    countries =
+      SEARCH_GROUPS.southeast_asia;
   } else if (scope === "europe") {
-    countries = SEARCH_GROUPS.europe;
+    countries =
+      SEARCH_GROUPS.europe;
   } else if (scope === "north_america") {
-    countries = SEARCH_GROUPS.north_america;
+    countries =
+      SEARCH_GROUPS.north_america;
   } else if (scope === "oceania") {
-    countries = SEARCH_GROUPS.oceania;
+    countries =
+      SEARCH_GROUPS.oceania;
   } else if (scope === "africa") {
-    countries = SEARCH_GROUPS.africa;
+    countries =
+      SEARCH_GROUPS.africa;
   } else {
     countries = [country];
   }
 
-  /*
-   * Remote mode.
-   */
-  const remoteMode = scope === "remote";
+  const remoteMode =
+    scope === "remote";
 
-  /*
-   * Search all selected countries.
-   */
   try {
     const responses = await Promise.all(
       countries.map((countryCode) =>
@@ -305,7 +289,8 @@ export async function GET(request) {
           what,
           where,
           employment,
-          remoteMode
+          remoteMode,
+          page
         })
       )
     );
@@ -336,19 +321,21 @@ export async function GET(request) {
       }
     }
 
-    let jobs = [...uniqueJobs.values()];
+    let jobs = [
+      ...uniqueJobs.values()
+    ];
 
     /*
      * Remote mode:
-     *
-     * Keep only jobs that actually look remote.
+     * Only keep jobs that actually
+     * look like remote jobs.
      */
     if (remoteMode) {
       jobs = jobs.filter(isRemoteJob);
     }
 
     /*
-     * Convert Adzuna jobs into our website format.
+     * Convert jobs to our website format.
      */
     jobs = jobs.map((job) => {
       const scoring = scoreJob(
@@ -393,10 +380,9 @@ export async function GET(request) {
     );
 
     /*
-     * Keep the page fast.
+     * Total number of available
+     * results from Adzuna.
      */
-    jobs = jobs.slice(0, 50);
-
     const totalResults =
       responses.reduce(
         (total, response) =>
@@ -404,8 +390,26 @@ export async function GET(request) {
         0
       );
 
+    /*
+     * There may be another page
+     * available from Adzuna.
+     */
+    const hasMore =
+      responses.some(
+        (response) =>
+          response.results.length >= 30
+      );
+
     return NextResponse.json({
       success: true,
+
+      page,
+
+      pageSize: 30,
+
+      totalResults,
+
+      hasMore,
 
       search: {
         scope,
@@ -418,15 +422,13 @@ export async function GET(request) {
         remote: remoteMode
       },
 
-      totalResults,
-
-      countriesSearched: countries.map(
-        (code) => ({
+      countriesSearched:
+        countries.map((code) => ({
           code,
           name:
-            COUNTRY_NAMES[code] || code
-        })
-      ),
+            COUNTRY_NAMES[code] ||
+            code
+        })),
 
       jobs
     });
